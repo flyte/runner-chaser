@@ -39,10 +39,12 @@ class Score(object):
 
 
 class MovingCharacter(Character):
-
-    max_moves_per_turn = 1
     
     class IllegalMove(Exception): pass
+    
+    def __init__(self, position, colour, max_moves_per_turn=1):
+        super(MovingCharacter, self).__init__(position, colour)
+        self.max_moves_per_turn = max_moves_per_turn
     
     def move(self, new_pos, grid):
         x_diff = abs(self.position[0] - new_pos[0])
@@ -56,7 +58,8 @@ class MovingCharacter(Character):
                 "Cannot move more than %d moves in one turn (you tried %d moves)." % (
                     self.max_moves_per_turn, tried))
         elif not grid.contains_coords(new_pos):
-            raise MovingCharacter.IllegalMove("Cannot move off the grid.")
+            raise MovingCharacter.IllegalMove("Cannot move off the grid. %s at %d, %d tried to move to %d, %d" % (
+                self.__class__.__name__, self.position[0], self.position[1], new_pos[0], new_pos[1]))
         
         self.position = new_pos
         
@@ -71,14 +74,17 @@ class MovingCharacter(Character):
         
     def move_right(self, grid, positions=1):
         self.move((self.position[0] + positions, self.position[1]), grid)
+        
+    def move_noop(self, grid, positions=1):
+        pass
 
 
 class Runner(MovingCharacter, Score):
-    pass
+    carnivorous = False
     
 
 class Chaser(MovingCharacter, Score):
-    pass
+    carnivorous = True
     
     
 class Apple(Character):
@@ -111,6 +117,15 @@ class Grid(object):
         """
         return (coords[0] < self.size[0] and coords[1] < self.size[1]) and \
             (coords[0] >= 0 and coords[1] >= 0)
+    
+    @staticmethod
+    def distance(a, b):
+        """
+        Calculates the amount of moves required to get from a to b.
+        """
+        xdiff = abs(a[0] - b[0])
+        ydiff = abs(a[1] - b[1])
+        return xdiff + ydiff
 
 
 class Game(object):
@@ -151,7 +166,10 @@ class Game(object):
                 eaten_apples.append(apple)
         
         for apple in eaten_apples:
-            self.apples.remove(apple)
+            # Sometimes both the runner and the chaser are on the same apple, so they appear in
+            # eaten_apples twice.
+            if apple in self.apples:
+                self.apples.remove(apple)
             
         self.refill_apples()
         
@@ -160,7 +178,52 @@ class Game(object):
         elif self.chaser.score >= 100:
             raise Game.Lose("The chaser ate 100 apples.")
         
+
+class Player(object):
+
+    def __init__(self, character, game):
+        self.character = character
+        self.game = game
         
+    def viable_apples(self):
+        # Find the distances to the apples
+        # Disregard any apples we can't get to in time
+        ## Give them a score based on how close/far they are from the other player?
+        ## The further the better for the runner, the closer the better for the chaser.
+        viable_apples = []
+        for apple in game.apples:
+            distance = Grid.distance(self.character.position, apple.position)
+            if distance <= apple.shelf_life:
+                viable_apples.append({ "apple": apple, "distance": distance })
+        
+        return sorted(viable_apples, key=lambda a: a["distance"])
+        
+    def next_move(self):
+        viable_apples = self.viable_apples()
+        if len(viable_apples):
+            target = viable_apples[0]
+        else:
+            return self.character.move_noop
+        
+        target_x, target_y = target["apple"].position
+        my_x, my_y = self.character.position
+        
+        diff_x = abs(my_x - target_x)
+        diff_y = abs(my_y - target_y)
+        
+        # Move y first if they're equal
+        if diff_y >= diff_x:
+            if my_y < target_y:
+                return self.character.move_down
+            else:
+                return self.character.move_up
+        else:
+            if my_x < target_x:
+                return self.character.move_right
+            else:
+                return self.character.move_left
+
+     
 GRID_POINT_DISTANCE = 50
 APPLE_COUNT = 2
 
@@ -190,10 +253,10 @@ def draw_character(window, character):
     
 def draw_all(game, window):
     draw_grid(game, window)
-    draw_character(window, game.runner)
-    draw_character(window, game.chaser)
     for apple in game.apples:
         draw_character(window, apple)
+    draw_character(window, game.runner)
+    draw_character(window, game.chaser)
     pygame.display.flip()
 
 if __name__ == "__main__":
@@ -210,20 +273,27 @@ if __name__ == "__main__":
     
     draw_all(game, window)
     
-#    while True:
-#        try:
-#            game.tick()
-#        except Game.Win, e:
-#            print "You won! %s" % e
-#            break
-#        except Game.Lose, e:
-#            print "You lost. %s" % e
-#            break
-#            
-#        draw_all(game, window)
-#        print "Runner score: %d, Chaser score: %d" % (game.runner.score, game.chaser.score)
-        #sleep(0.1)
+    p_runner = Player(game.runner, game)
+    p_chaser = Player(game.chaser, game)
     
+    while True:
+        moves = [ p_runner.next_move(), p_chaser.next_move() ]
+        for m in moves: m(game.grid)
+
+        try:
+            game.tick()
+        except Game.Win, e:
+            print "You won! %s" % e
+            break
+        except Game.Lose, e:
+            print "You lost. %s" % e
+            break
+            
+        draw_all(game, window)
+        print "Runner score: %d, Chaser score: %d" % (game.runner.score, game.chaser.score)
+        #sleep(0.01)
+    
+    draw_all(game, window)
     
     
     
