@@ -198,14 +198,32 @@ class Player(object):
         
         return sorted(viable_apples, key=lambda a: a["distance"])
         
-    def next_move(self):
+    def find_target(self):
         viable_apples = self.viable_apples()
-        if len(viable_apples):
-            target = viable_apples[0]
+        target = None
+        
+        if self.character.carnivorous:
+            # Target the runner
+            target = self.game.runner
+            
+            # Unless an apple is closer
+            if len(viable_apples):
+                runner_distance = Grid.distance(self.character.position, self.game.runner.position)
+                if viable_apples[0]["distance"] < runner_distance:
+                    target = viable_apples[0]["apple"]
         else:
+            if len(viable_apples):
+                target = viable_apples[0]["apple"]
+
+        return target
+       
+    def next_move(self):
+        target = self.find_target()
+        
+        if not target:
             return self.character.move_noop
         
-        target_x, target_y = target["apple"].position
+        target_x, target_y = target.position
         my_x, my_y = self.character.position
         
         diff_x = abs(my_x - target_x)
@@ -291,7 +309,7 @@ if __name__ == "__main__":
             
         draw_all(game, window)
         print "Runner score: %d, Chaser score: %d" % (game.runner.score, game.chaser.score)
-        #sleep(0.01)
+        sleep(0.25)
     
     draw_all(game, window)
     
