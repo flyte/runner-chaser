@@ -1,7 +1,7 @@
 import pygame
 from abc import ABCMeta, abstractmethod
 from time import sleep
-from random import randint
+from random import randint, choice
 from math import ceil
 
 def enum(*sequential, **named):
@@ -11,8 +11,13 @@ def enum(*sequential, **named):
     enums = dict(zip(sequential, range(len(sequential))), **named)
     return type('Enum', (), enums)
     
+def log(msg):
+    print "Log: %s" % msg
 
 class Character(object):
+    """
+    Abstract base class for all characters on the grid.
+    """
     
     __metaclass__ = ABCMeta
     
@@ -29,6 +34,9 @@ class Character(object):
         
         
 class Score(object):
+    """
+    Score mixin class for characters which keep a score.
+    """
 
     score = 0
         
@@ -40,6 +48,11 @@ class Score(object):
 
 
 class MovingCharacter(Character):
+    """
+    Base class for a character which has the ability to move.
+    """
+    
+    __metaclass__ = ABCMeta
     
     class IllegalMove(Exception): pass
     
@@ -48,6 +61,9 @@ class MovingCharacter(Character):
         self.max_moves_per_turn = max_moves_per_turn
     
     def move(self, new_pos, grid):
+        """
+        Move the character on the grid.
+        """
         x_diff = abs(self.position[0] - new_pos[0])
         y_diff = abs(self.position[1] - new_pos[1])
         
@@ -109,6 +125,8 @@ class Wall(Character):
         
 class Grid(object):
 
+    Direction = enum("NORTH", "EAST", "SOUTH", "WEST")
+
     def __init__(self, size):
         self.size = size
         
@@ -127,6 +145,68 @@ class Grid(object):
         xdiff = abs(a[0] - b[0])
         ydiff = abs(a[1] - b[1])
         return ceil(float(xdiff + ydiff) / float(moves_per_turn))
+        
+    @staticmethod
+    def direction(a, b):
+        """
+        Calculates which direction b is from a. Returns a Grid.Direction.
+        """
+        xdiff = a[0] - b[0]
+        ydiff = a[1] - b[1]
+        
+        direction = [None, None]
+        if xdiff >= ydiff:
+            # It's east or west
+            if xdiff >= 0:
+                direction[0] = Grid.Direction.WEST
+            else:
+                direction[0] = Grid.Direction.EAST
+            # Secondary direction
+            if ydiff >= 0:
+                direction[1] = Grid.Direction.NORTH
+            elif ydiff < 0:
+                direction[1] = Grid.Direction.SOUTH
+        else:
+            # It's north or south
+            if ydiff >= 0:
+                direction[0] = Grid.Direction.NORTH
+            else:
+                direction[0] = Grid.Direction.SOUTH
+            # Secondary direction
+            if xdiff >= 0:
+                direction[1] = Grid.Direction.WEST
+            elif xdiff < 0:
+                direction[1] = Grid.Direction.EAST
+        
+        return tuple(direction)
+    
+    @staticmethod
+    def coords_for_direction(a, direction, steps=1):
+        """
+        Calculates coordinates for moving in the specified Grid.Direction from a.
+        """
+        if direction == Grid.Direction.NORTH:
+            return (a[0], a[1] - steps)
+        elif direction == Grid.Direction.EAST:
+            return (a[0] + steps, a[1])
+        elif direction == Grid.Direction.SOUTH:
+            return (a[0], a[1] + steps)
+        elif direction == Grid.Direction.WEST:
+            return (a[0] - steps, a[1])
+            
+    @staticmethod
+    def opposite_direction(direction):
+        """
+        Calculates the opposite direction to the one provided.
+        """
+        if direction == Grid.Direction.NORTH:
+            return Grid.Direction.SOUTH
+        elif direction == Grid.Direction.EAST:
+            return Grid.Direction.WEST
+        elif direction == Grid.Direction.SOUTH:
+            return Grid.Direction.NORTH
+        elif direction == Grid.Direction.WEST:
+            return Grid.Direction.EAST
 
 
 class Game(object):
@@ -182,8 +262,9 @@ class Game(object):
 
 class Player(object):
 
-    def __init__(self, character, game):
-        self.character = character
+    __metaclass__ = ABCMeta
+
+    def __init__(self, game):
         self.game = game
         
     def viable_apples(self):
@@ -198,34 +279,15 @@ class Player(object):
                 viable_apples.append({ "apple": apple, "distance": distance })
         
         return sorted(viable_apples, key=lambda a: a["distance"])
-        
-    def find_target(self):
-        viable_apples = self.viable_apples()
-        target = None
-        
-        if self.character.carnivorous:
-            # Target the runner
-            target = self.game.runner
-            
-            # Unless an apple is closer
-            if len(viable_apples):
-                runner_distance = Grid.distance(self.character.position, self.game.runner.position)
-                if viable_apples[0]["distance"] < runner_distance:
-                    target = viable_apples[0]["apple"]
-        else:
-            if len(viable_apples):
-                target = viable_apples[0]["apple"]
 
-        return target
-       
     def make_move(self):
-        target = self.find_target()
+        target_coords = self.find_target_coords()
         
-        if not target:
+        if not target_coords:
             self.character.move_noop(self.game.grid)
             return
         
-        target_x, target_y = target.position
+        target_x, target_y = target_coords
         my_x, my_y = self.character.position
         
         diff_x = abs(my_x - target_x)
@@ -252,6 +314,107 @@ class Player(object):
                 self.character.move_right(self.game.grid, moves)
             else:
                 self.character.move_left(self.game.grid, moves)
+
+    @abstractmethod
+    def find_target_coords(self):
+        pass
+
+
+class ChaserPlayer(Player):
+
+    def __init__(self, game):
+        super(ChaserPlayer, self).__init__(game)
+        self.character = game.chaser
+
+    def find_target_coords(self):
+        viable_apples = self.viable_apples()
+        target_coords = None
+    
+        # Target the runner
+        target_coords = self.game.runner.position
+        
+        # Unless an apple is closer
+        if len(viable_apples):
+            runner_distance = Grid.distance(self.character.position, self.game.runner.position)
+            if viable_apples[0]["distance"] < runner_distance:
+                target_coords = viable_apples[0]["apple"].position
+                
+        return target_coords
+        
+
+class RunnerPlayer(Player):
+
+    def __init__(self, game):
+        super(RunnerPlayer, self).__init__(game)
+        self.character = game.runner
+
+    def find_target_coords(self):
+        viable_apples = self.viable_apples()
+        target_coords = None
+
+        if len(viable_apples):
+            target_coords = viable_apples[0]["apple"].position
+            
+        chaser_distance = Grid.distance(self.character.position, self.game.chaser.position, 1)
+        danger_zone = 3
+        
+        if chaser_distance <= danger_zone:
+            log("Chaser is in danger zone!")
+            pos = self.character.position
+            moves = self.character.max_moves_per_turn
+            direction = Grid.direction(pos, self.game.chaser.position)
+            N, E, S, W = (Grid.Direction.NORTH, Grid.Direction.EAST,
+                Grid.Direction.SOUTH, Grid.Direction.WEST)
+            
+            target_coords = Grid.coords_for_direction(
+                pos, Grid.opposite_direction(direction[0]), moves)
+                
+            log("Trying to move in the %s direction.." % Grid.opposite_direction(direction[0]))
+            
+            if not self.game.grid.contains_coords(target_coords):
+                log("My evasive action takes me out of the grid (%d, %d).." % (
+                    target_coords[0], target_coords[1]))
+                # If the chaser is inline with us
+                if not direction[1]:
+                    log("Chaser is inline with us")
+                    if direction[0] in (N, S):
+                        log("Chaser is primarily north or south")
+                        middle = self.game.grid.size[0] / 2.0
+                        
+                        # If we're in the middle
+                        if pos[0] == middle:
+                            log("We're in the middle of the grid on the x plane")
+                            # Choose a direction at random
+                            new_direction = choice((E, W))
+                        else:
+                            log("We're in the east or west half of the grid")
+                            # If we're in the east half, go west (where the skies are blue), else east
+                            new_direction = W if pos[0] > middle else E
+                    else: # Direction was east or west, so we go north or south
+                        middle = self.game.grid.size[1] / 2.0
+                        
+                        if pos[1] == middle:
+                            log("We're in the middle of the grid on the y plane")
+                            new_direction = choice((N, S))
+                        else:
+                            log("We're in the north or south half of the grid")
+                            new_direction = N if pos[1] > middle else S
+                else:
+                    # We go in the direction that the chaser isn't
+                    new_direction = Grid.opposite_direction(direction[1])
+                    log("Going in the direction that the chaser isn't (%s).." % new_direction)
+            
+                target_coords = Grid.coords_for_direction(pos, new_direction, moves)
+            
+            # If our evasive action still takes us off the grid
+            if not self.game.grid.contains_coords(target_coords):
+                log("My evasive action takes me out of the grid again (%d, %d).." % (
+                    target_coords[0], target_coords[1]))
+                log("Last resort. Going in the direction that the chaser is furthest in (%s)" % direction[1])
+                # We go in the direction the chaser is furthest in
+                target_coords = Grid.coords_for_direction(pos, direction[0], moves)
+
+        return target_coords
 
      
 GRID_POINT_DISTANCE = 50
@@ -303,9 +466,10 @@ if __name__ == "__main__":
     
     draw_all(game, window)
     
-    p_runner = Player(game.runner, game)
-    p_chaser = Player(game.chaser, game)
+    p_runner = RunnerPlayer(game)
+    p_chaser = ChaserPlayer(game)
     
+    previous_scores = [0, 0]
     while True:
         for c in [ p_runner, p_chaser ]:
             c.make_move()
@@ -320,8 +484,10 @@ if __name__ == "__main__":
             break
             
         draw_all(game, window)
-        print "Runner score: %d, Chaser score: %d" % (game.runner.score, game.chaser.score)
-        sleep(0.75)
+        if game.runner.score != previous_scores[0] or game.chaser.score != previous_scores[1]:
+            print "Runner score: %d, Chaser score: %d" % (game.runner.score, game.chaser.score)
+            previous_scores = [ game.runner.score, game.chaser.score ]
+        sleep(0.1)
     
     draw_all(game, window)
     
