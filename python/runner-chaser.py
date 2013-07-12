@@ -27,7 +27,7 @@ class Character(object):
         self.colour = colour
         
         
-class ScoreMixin(object):
+class Score(object):
 
     score = 0
         
@@ -38,11 +38,46 @@ class ScoreMixin(object):
         self.score -+ 1
 
 
-class Runner(Character, ScoreMixin):
+class MovingCharacter(Character):
+
+    max_moves_per_turn = 1
+    
+    class IllegalMove(Exception): pass
+    
+    def move(self, new_pos, grid):
+        x_diff = abs(self.position[0] - new_pos[0])
+        y_diff = abs(self.position[1] - new_pos[1])
+        
+        if x_diff and y_diff:
+            raise MovingCharacter.IllegalMove("Cannot move in two directions in one turn.")
+        elif x_diff > self.max_moves_per_turn or y_diff > self.max_moves_per_turn:
+            tried = x_diff if x_diff > y_diff else y_diff
+            raise MovingCharacter.IllegalMove(
+                "Cannot move more than %d moves in one turn (you tried %d moves)." % (
+                    self.max_moves_per_turn, tried))
+        elif not grid.contains_coords(new_pos):
+            raise MovingCharacter.IllegalMove("Cannot move off the grid.")
+        
+        self.position = new_pos
+        
+    def move_up(self, grid, positions=1):
+        self.move((self.position[0], self.position[1] - positions), grid)
+        
+    def move_down(self, grid, positions=1):
+        self.move((self.position[0], self.position[1] + positions), grid)
+        
+    def move_left(self, grid, positions=1):
+        self.move((self.position[0] - positions, self.position[1]), grid)
+        
+    def move_right(self, grid, positions=1):
+        self.move((self.position[0] + positions, self.position[1]), grid)
+
+
+class Runner(MovingCharacter, Score):
     pass
     
 
-class Chaser(Character, ScoreMixin):
+class Chaser(MovingCharacter, Score):
     pass
     
     
@@ -74,7 +109,8 @@ class Grid(object):
         """
         Checks whether the grid contains the given coordinates.
         """
-        return coords[0] < self.size[0] and coords[1] < self.size[1]
+        return (coords[0] < self.size[0] and coords[1] < self.size[1]) and \
+            (coords[0] >= 0 and coords[1] >= 0)
 
 
 class Game(object):
@@ -152,7 +188,7 @@ def draw_grid(game, window):
 def draw_character(window, character):
     pygame.draw.circle(window, character.colour, get_position(character.position), 10)
     
-def update_screen(game, window):
+def draw_all(game, window):
     draw_grid(game, window)
     draw_character(window, game.runner)
     draw_character(window, game.chaser)
@@ -172,18 +208,20 @@ if __name__ == "__main__":
         GRID_POINT_DISTANCE * (grid_size[0] + 1),
         GRID_POINT_DISTANCE * (grid_size[1] + 1)))
     
-    while True:
-        try:
-            game.tick()
-        except Game.Win, e:
-            print "You won! %s" % e
-            break
-        except Game.Lose, e:
-            print "You lost. %s" % e
-            break
-            
-        update_screen(game, window)
-        print "Runner score: %d, Chaser score: %d" % (game.runner.score, game.chaser.score)
+    draw_all(game, window)
+    
+#    while True:
+#        try:
+#            game.tick()
+#        except Game.Win, e:
+#            print "You won! %s" % e
+#            break
+#        except Game.Lose, e:
+#            print "You lost. %s" % e
+#            break
+#            
+#        draw_all(game, window)
+#        print "Runner score: %d, Chaser score: %d" % (game.runner.score, game.chaser.score)
         #sleep(0.1)
     
     
