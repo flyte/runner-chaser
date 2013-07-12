@@ -136,6 +136,18 @@ class Grid(object):
         """
         return (coords[0] < self.size[0] and coords[1] < self.size[1]) and \
             (coords[0] >= 0 and coords[1] >= 0)
+            
+    def distance_to_wall(self, coords):
+        """
+        Returns the distance between coords and the nearest wall and the direction it's in.
+        """
+        directions = [
+            (Grid.Direction.NORTH, coords[1]),
+            (Grid.Direction.EAST, self.size[0]- 1 - coords[0]),
+            (Grid.Direction.SOUTH, self.size[1] - 1 - coords[1]),
+            (Grid.Direction.WEST, coords[0])
+        ]
+        return sorted(directions, key=lambda d: d[1])[0]
     
     @staticmethod
     def distance(a, b, moves_per_turn=1):
@@ -207,6 +219,36 @@ class Grid(object):
             return Grid.Direction.NORTH
         elif direction == Grid.Direction.WEST:
             return Grid.Direction.EAST
+            
+    @staticmethod
+    def next_pos(a, b, max_moves_per_turn=1):
+        """
+        Calculates the next move from a to b and returns the coordinates.
+        """
+        target_x, target_y = b
+        my_x, my_y = a
+        pos = list(a)
+        
+        diff_x = abs(my_x - target_x)
+        diff_y = abs(my_y - target_y)
+        
+        # Move y first if they're equal
+        if diff_y >= diff_x:
+            moves = diff_y if max_moves_per_turn > diff_y else max_moves_per_turn
+
+            # Move down
+            if my_y < target_y: pos[1] += moves
+            # Move up
+            else: pos[1] -= moves
+        else:
+            moves = diff_x if max_moves_per_turn > diff_x else max_moves_per_turn
+            
+            # Move right
+            if my_x < target_x: pos[0] += moves
+            # Move left
+            else: pos[0] -= moves
+        
+        return tuple(pos)
 
 
 class Game(object):
@@ -279,7 +321,7 @@ class Player(object):
                 viable_apples.append({ "apple": apple, "distance": distance })
         
         return sorted(viable_apples, key=lambda a: a["distance"])
-
+        
     def make_move(self):
         target_coords = self.find_target_coords()
         
@@ -287,33 +329,9 @@ class Player(object):
             self.character.move_noop(self.game.grid)
             return
         
-        target_x, target_y = target_coords
-        my_x, my_y = self.character.position
-        
-        diff_x = abs(my_x - target_x)
-        diff_y = abs(my_y - target_y)
-        
-        # Move y first if they're equal
-        if diff_y >= diff_x:
-            if self.character.max_moves_per_turn > diff_y:
-                moves = diff_y
-            else:
-                moves = self.character.max_moves_per_turn
-
-            if my_y < target_y:
-                self.character.move_down(self.game.grid, moves)
-            else:
-                self.character.move_up(self.game.grid, moves)
-        else:
-            if self.character.max_moves_per_turn > diff_x:
-                moves = diff_x
-            else:
-                moves = self.character.max_moves_per_turn                
-        
-            if my_x < target_x:
-                self.character.move_right(self.game.grid, moves)
-            else:
-                self.character.move_left(self.game.grid, moves)
+        self.character.move(
+            Grid.next_pos(self.character.position, target_coords, self.character.max_moves_per_turn),
+                self.game.grid)
 
     @abstractmethod
     def find_target_coords(self):
@@ -347,6 +365,27 @@ class RunnerPlayer(Player):
     def __init__(self, game):
         super(RunnerPlayer, self).__init__(game)
         self.character = game.runner
+
+    def heuristic_distance(self, target_coords):
+        """
+        Estimates distance cost from current location to target. Adds cost for proximity to chaser and walls.
+        """
+        chaser_pos = self.game.chaser.position
+        distance = Grid.distance(self.character.position, target_coords)
+        danger_zone = 3
+        
+        cost = 0
+        pos = list(self.character.position)
+        while tuple(pos) != target_coords:
+            cost += 1
+            pos = Grid.next_pos(pos, target_coords, self.character.max_moves_per_turn)
+            
+            # If pos in the danger zone, add some cost
+            chaser_distance = Grid.distance(pos, self.game.chaser.position, 1)
+            if chaser_distance <= danger_zone:
+                cost += int(danger_zone - chaser_distance + 1)
+                
+        return cost
 
     def find_target_coords(self):
         viable_apples = self.viable_apples()
