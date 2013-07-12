@@ -2,6 +2,7 @@ import pygame
 from abc import ABCMeta, abstractmethod
 from time import sleep
 from random import randint
+from math import ceil
 
 def enum(*sequential, **named):
     """
@@ -119,13 +120,13 @@ class Grid(object):
             (coords[0] >= 0 and coords[1] >= 0)
     
     @staticmethod
-    def distance(a, b):
+    def distance(a, b, moves_per_turn=1):
         """
         Calculates the amount of moves required to get from a to b.
         """
         xdiff = abs(a[0] - b[0])
         ydiff = abs(a[1] - b[1])
-        return xdiff + ydiff
+        return ceil(float(xdiff + ydiff) / float(moves_per_turn))
 
 
 class Game(object):
@@ -135,7 +136,7 @@ class Game(object):
 
     def __init__(self, grid_size, runner_start_pos, chaser_start_pos):
         self.grid = Grid(grid_size)
-        self.runner = Runner(runner_start_pos, (0, 0, 255))
+        self.runner = Runner(runner_start_pos, (0, 0, 255), 2)
         self.chaser = Chaser(chaser_start_pos, (255, 0, 0))
         self.apples = []
         self.refill_apples()
@@ -192,7 +193,7 @@ class Player(object):
         ## The further the better for the runner, the closer the better for the chaser.
         viable_apples = []
         for apple in game.apples:
-            distance = Grid.distance(self.character.position, apple.position)
+            distance = Grid.distance(self.character.position, apple.position, self.character.max_moves_per_turn)
             if distance <= apple.shelf_life:
                 viable_apples.append({ "apple": apple, "distance": distance })
         
@@ -217,11 +218,12 @@ class Player(object):
 
         return target
        
-    def next_move(self):
+    def make_move(self):
         target = self.find_target()
         
         if not target:
-            return self.character.move_noop
+            self.character.move_noop(self.game.grid)
+            return
         
         target_x, target_y = target.position
         my_x, my_y = self.character.position
@@ -231,15 +233,25 @@ class Player(object):
         
         # Move y first if they're equal
         if diff_y >= diff_x:
+            if self.character.max_moves_per_turn > diff_y:
+                moves = diff_y
+            else:
+                moves = self.character.max_moves_per_turn
+
             if my_y < target_y:
-                return self.character.move_down
+                self.character.move_down(self.game.grid, moves)
             else:
-                return self.character.move_up
+                self.character.move_up(self.game.grid, moves)
         else:
-            if my_x < target_x:
-                return self.character.move_right
+            if self.character.max_moves_per_turn > diff_x:
+                moves = diff_x
             else:
-                return self.character.move_left
+                moves = self.character.max_moves_per_turn                
+        
+            if my_x < target_x:
+                self.character.move_right(self.game.grid, moves)
+            else:
+                self.character.move_left(self.game.grid, moves)
 
      
 GRID_POINT_DISTANCE = 50
@@ -295,8 +307,8 @@ if __name__ == "__main__":
     p_chaser = Player(game.chaser, game)
     
     while True:
-        moves = [ p_runner.next_move(), p_chaser.next_move() ]
-        for m in moves: m(game.grid)
+        for c in [ p_runner, p_chaser ]:
+            c.make_move()
 
         try:
             game.tick()
@@ -309,7 +321,7 @@ if __name__ == "__main__":
             
         draw_all(game, window)
         print "Runner score: %d, Chaser score: %d" % (game.runner.score, game.chaser.score)
-        sleep(0.25)
+        sleep(0.75)
     
     draw_all(game, window)
     
