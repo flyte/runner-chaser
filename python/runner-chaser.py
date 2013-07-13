@@ -13,7 +13,7 @@ def enum(*sequential, **named):
     
 def log(msg):
     print "Log: %s" % msg
-
+    
 class Character(object):
     """
     Abstract base class for all characters on the grid.
@@ -148,6 +148,25 @@ class Grid(object):
             (Grid.Direction.WEST, coords[0])
         ]
         return sorted(directions, key=lambda d: d[1])[0]
+        
+    def surrounding_valid_coords(self, coords, radius=1):
+        """
+        Returns all valid coordinates on the grid within the given radius.
+        """
+        valid_coords = []
+        for i in xrange(radius):
+            functions = (
+                lambda c: (c[0] + 1 + i, c[1]),
+                lambda c: (c[0] - (1 + i), c[1]),
+                lambda c: (c[0], c[1] + 1 + i),
+                lambda c: (c[0], c[1] - (1 + i))
+            )
+            for f in functions:
+                c = f(coords)
+                if self.contains_coords(c):
+                    valid_coords.append(c)
+                    
+        return valid_coords
     
     @staticmethod
     def distance(a, b, moves_per_turn=1):
@@ -223,7 +242,7 @@ class Grid(object):
     @staticmethod
     def next_pos(a, b, max_moves_per_turn=1):
         """
-        Calculates the next move from a to b and returns the coordinates.
+        Calculates the next move from a to b as the crow flies and returns the coordinates.
         """
         target_x, target_y = b
         my_x, my_y = a
@@ -360,6 +379,15 @@ class ChaserPlayer(Player):
         return target_coords
         
 
+class AStarNode(object):
+
+    def __init__(self, coords, g, h):
+        self.coords = coords
+        self.f = g + h
+        self.g = g
+        self.h = h
+
+
 class RunnerPlayer(Player):
 
     def __init__(self, game):
@@ -387,12 +415,30 @@ class RunnerPlayer(Player):
                 
         return cost
 
-    def find_target_coords(self):
+    def a_star_next_step(self):
+        target_coords = self.find_target_coords(avoid_chaser=False)
+        
+        open_list = [
+            AStarNode(self.character.position, 0, self.heuristic_distance(target_coords))
+        ]
+        closed_list = []
+        while len(open_list):
+            node_current = sorted(open_list, key=lambda n: n.f)
+            if node_current.coords == target_coords:
+                break
+                
+            
+        
+
+    def find_target_coords(self, avoid_chaser=True):
         viable_apples = self.viable_apples()
         target_coords = None
 
         if len(viable_apples):
             target_coords = viable_apples[0]["apple"].position
+        
+        if not avoid_chaser:
+            return target_coords
             
         chaser_distance = Grid.distance(self.character.position, self.game.chaser.position, 1)
         danger_zone = 3
