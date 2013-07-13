@@ -75,8 +75,11 @@ class MovingCharacter(Character):
                 "Cannot move more than %d moves in one turn (you tried %d moves)." % (
                     self.max_moves_per_turn, tried))
         elif not grid.contains_coords(new_pos):
-            raise MovingCharacter.IllegalMove("Cannot move off the grid. %s at %d, %d tried to move to %d, %d" % (
-                self.__class__.__name__, self.position[0], self.position[1], new_pos[0], new_pos[1]))
+            raise MovingCharacter.IllegalMove("Cannot move off the grid. %s at %d, %d tried to" \
+                " move to %d, %d" % (
+                self.__class__.__name__, self.position[0],
+                self.position[1], new_pos[0], new_pos[1])
+            )
         
         self.position = new_pos
         
@@ -151,7 +154,7 @@ class Grid(object):
         
     def surrounding_valid_coords(self, coords, radius=1):
         """
-        Returns all valid coordinates on the grid within the given radius.
+        Returns all valid coordinates in a straight line within the given radius.
         """
         valid_coords = []
         for i in xrange(radius):
@@ -342,14 +345,18 @@ class Player(object):
         return sorted(viable_apples, key=lambda a: a["distance"])
         
     def make_move(self):
-        target_coords = self.find_target_coords()
+        try:
+            target_coords = self.find_path()[1].position
+        except:
+            target_coords = self.find_target_coords()
         
         if not target_coords:
             self.character.move_noop(self.game.grid)
             return
         
         self.character.move(
-            Grid.next_pos(self.character.position, target_coords, self.character.max_moves_per_turn),
+            Grid.next_pos(self.character.position, target_coords,
+                self.character.max_moves_per_turn),
                 self.game.grid)
 
     @abstractmethod
@@ -381,8 +388,8 @@ class ChaserPlayer(Player):
 
 class AStarNode(object):
 
-    def __init__(self, coords, g, h):
-        self.coords = coords
+    def __init__(self, position, g, h):
+        self.position = position
         self.f = g + h
         self.g = g
         self.h = h
@@ -396,7 +403,8 @@ class RunnerPlayer(Player):
 
     def heuristic_distance(self, target_coords):
         """
-        Estimates distance cost from current location to target. Adds cost for proximity to chaser and walls.
+        Estimates distance cost from current location to target. Adds cost for proximity to chaser
+        and walls.
         """
         chaser_pos = self.game.chaser.position
         distance = Grid.distance(self.character.position, target_coords)
@@ -415,19 +423,54 @@ class RunnerPlayer(Player):
                 
         return cost
 
-    def a_star_next_step(self):
+    def find_path(self):
         target_coords = self.find_target_coords(avoid_chaser=False)
+        if not target_coords:
+            return [self.character.position]
         
-        open_list = [
-            AStarNode(self.character.position, 0, self.heuristic_distance(target_coords))
-        ]
-        closed_list = []
-        while len(open_list):
-            node_current = sorted(open_list, key=lambda n: n.f)
-            if node_current.coords == target_coords:
-                break
-                
+        start_node = AStarNode(self.character.position, 0, self.heuristic_distance(target_coords))
+        open_set = { start_node.position: start_node }
+        closed_set = {}
+        came_from = {}
+        
+        while len(open_set):
+            node_current = sorted(open_set.iteritems(), key=lambda n: n[1].f)[0][1]
+            if node_current.position == target_coords:
+                return self.reconstruct_path(came_from, node_current)
             
+            del open_set[node_current.position]
+            closed_set[node_current.position] = node_current
+            
+            node_successors = [
+                AStarNode(pos,
+                    Grid.distance(node_current.position, pos, self.character.max_moves_per_turn) + \
+                        node_current.g,
+                    self.heuristic_distance(target_coords)
+                ) for pos in self.game.grid.surrounding_valid_coords(node_current.position,
+                    self.character.max_moves_per_turn)
+            ]
+            
+            for node_successor in node_successors:
+                if node_successor.position in closed_set and (
+                    node_successor.g >= closed_set[node_successor.position].g):
+                    continue
+                
+                if node_successor.position not in open_set or (
+                    node_successor.position in closed_set and \
+                    node_successor.g < closed_set[node_successor.position].g):
+                    came_from[node_successor.position] = node_current
+                    if node_successor.position not in open_set:
+                        open_set[node_successor.position] = node_successor
+        
+        return None
+        
+    def reconstruct_path(self, came_from, current_node):
+        if current_node.position in came_from:
+            path = self.reconstruct_path(came_from, came_from[current_node.position])
+            path.append(current_node)
+            return path
+        else:
+            return [current_node]
         
 
     def find_target_coords(self, avoid_chaser=True):
@@ -473,7 +516,7 @@ class RunnerPlayer(Player):
                             new_direction = choice((E, W))
                         else:
                             log("We're in the east or west half of the grid")
-                            # If we're in the east half, go west (where the skies are blue), else east
+                            # If we're in the east half, go west (where the skies are blue)
                             new_direction = W if pos[0] > middle else E
                     else: # Direction was east or west, so we go north or south
                         middle = self.game.grid.size[1] / 2.0
