@@ -473,7 +473,7 @@ class RunnerPlayer(Player):
                 for node in path:
                     pygame.draw.circle(window, (0, 0, 255), get_position(node.pos), 10, 2)
                     pygame.display.flip()
-                #sleep(1)
+                sleep(1)
                 return path
             
             # Remove the current node from open_set and add it to closed_set
@@ -520,9 +520,12 @@ class RunnerPlayer(Player):
             
             # Fill in closed set
             for coords, node in closed_set.iteritems():
+                if coords == self.character.position:
+                    continue
                 red = interp(node.f, (0, 16), (0, 255))
                 pygame.draw.circle(window, (red, 255 - red, 0), get_position(coords), 5)
-                pygame.display.flip()
+
+            #pygame.display.flip()
         
         # We didn't reach our goal, so return our current position only
         return [start_node]
@@ -656,9 +659,18 @@ if __name__ == "__main__":
 #    chaser_start_pos = (grid_size[0] / 2, grid_size[1] / 2)
 
     for i in xrange(grid_size[1]):
-        if i != grid_size[1] / 2:
+        if i != 0:
+            WALLS.append((1, i))
+            WALLS.append((2, i))
             WALLS.append((7, i))
-            WALLS.append((6, i))
+            WALLS.append((8, i))
+            WALLS.append((13, i))
+            WALLS.append((14, i))
+        if i != grid_size[1] - 1:
+            WALLS.append((4, i))
+            WALLS.append((5, i))
+            WALLS.append((10, i))
+            WALLS.append((11, i))
     
     game = Game(grid_size, runner_start_pos, chaser_start_pos)
     
