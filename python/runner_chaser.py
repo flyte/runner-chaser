@@ -608,7 +608,6 @@ def draw_path(path):
         for node in path:
             pygame.draw.circle(window, (0, 0, 255), get_position(node.pos), 3)
         pygame.display.flip()
-    sleep(1)
     
 def draw_sets(open_set, closed_set, character_position, target_coords):
     if DRAW_OPEN_SET:
@@ -647,7 +646,7 @@ if __name__ == "__main__":
             WALLS.append((x - 1, i))
 
 
-    game = Game(grid_size, runner_start_pos, chaser_start_pos, 99999999)
+    game = Game(grid_size, runner_start_pos, chaser_start_pos, 100)
     
     pygame.init()
     window = pygame.display.set_mode((
@@ -670,10 +669,10 @@ if __name__ == "__main__":
         try:
             game.tick()
         except Game.Win, e:
-            print "You won! %s" % e
+            print "Runner won! %s" % e
             break
         except Game.Lose, e:
-            print "You lost. %s" % e
+            print "Chaser won! %s" % e
             break
             
         draw_all(game, window)
