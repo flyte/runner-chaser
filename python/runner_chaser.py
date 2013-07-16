@@ -420,10 +420,6 @@ class Player(object):
         return cost
 
     def create_a_star_node(self, nc, pos, target_coords):
-        # Get all surrounding coordinates within our character's max_moves_per_turn radius.
-        # Create nodes for each of the coordinates including distance from current node and
-        # heuristic distance (cost) from current character position.
-        
         return AStarNode(pos,
             Grid.distance(nc.pos, pos,
                 self.character.max_moves_per_turn) + nc.g,
@@ -477,7 +473,7 @@ class Player(object):
                 
                 if in_closed_set: del closed_set[ns.pos]
  
-                # Add the current node as the originating node for this coordinate
+                # Set the current node as the originating node for this coordinate
                 came_from[ns.pos] = nc
                 
                 # If we've reached our goal, reconstruct the path and return it
@@ -643,23 +639,7 @@ if __name__ == "__main__":
     grid_size = (80, 45)
     runner_start_pos = (0, grid_size[1] - 1)
     chaser_start_pos = (grid_size[0] - 1, 0)
-#    chaser_start_pos = (grid_size[0] / 2, grid_size[1] / 2)
 
-    """
-    for i in xrange(grid_size[1]):
-        if i != 0:
-            WALLS.append((1, i))
-            WALLS.append((2, i))
-            WALLS.append((7, i))
-            WALLS.append((8, i))
-            WALLS.append((13, i))
-            WALLS.append((14, i))
-        if i != grid_size[1] - 1:
-            WALLS.append((4, i))
-            WALLS.append((5, i))
-            WALLS.append((10, i))
-            WALLS.append((11, i))
-    """
     for i in xrange(grid_size[1]):
         x = grid_size[0] / 2
         if i != grid_size[1] / 2:
