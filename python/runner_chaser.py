@@ -333,6 +333,19 @@ class Game(object):
             raise Game.Lose("The chaser ate %d apples." % self.win_score)
         
 
+class AStarNode(object):
+
+    def __init__(self, pos, g, h):
+        self.pos = pos
+        self.f = g + h
+        self.g = g
+        self.h = h
+        
+    def __repr__(self):
+        return "Pos(%d,%d), F(%d), G(%d), H(%d)" % (
+            self.pos[0], self.pos[1], self.f, self.g, self.h)
+
+
 class Player(object):
 
     __metaclass__ = ABCMeta
@@ -342,10 +355,11 @@ class Player(object):
         self.path = None
         self.path_progress = 0
         self.avoid_set = set()
+        self.path_interruptions = [self.target_gone]
         self.path_found = Event()
         self.successors_evaluated = Event()
+        self.target_character = None
 
-        
     def viable_apples(self):
         # Find the distances to the apples
         # Disregard any apples we can't get to in time
@@ -359,6 +373,10 @@ class Player(object):
                 viable_apples.append({ "apple": apple, "distance": distance })
         
         return sorted(viable_apples, key=lambda a: a["distance"])
+
+    def target_gone(self):
+        if len(self.path) > 1:
+            return self.path[len(self.path) - 1].pos != self.target_character.position
 
     def interrupt_path(self):
         for i in self.path_interruptions:
@@ -449,9 +467,6 @@ class Player(object):
             
             # For each of the nodes surrounding the current node
             for ns in node_successors:
-                #pygame.draw.circle(window, (255, 255, 0), get_position(ns.pos), 5)
-                #pygame.display.flip()            
-            
                 # If we've evaluated this neighbor node before and it took the same or more
                 # cost to get to it this time then move on.
                 in_closed_set = ns.pos in closed_set
@@ -501,36 +516,25 @@ class ChaserPlayer(Player):
     def __init__(self, game):
         super(ChaserPlayer, self).__init__(game)
         self.character = game.chaser
-        self.path_interruptions = []
 
     def find_target_coords(self):
         viable_apples = self.viable_apples()
         target_coords = None
+        self.target_character = None
     
         # Target the runner
         target_coords = self.game.runner.position
+        self.target_character = self.game.runner
         
         # Unless an apple is closer
         if len(viable_apples):
             runner_distance = Grid.distance(self.character.position, self.game.runner.position)
             if viable_apples[0]["distance"] < runner_distance:
                 target_coords = viable_apples[0]["apple"].position
+                self.target_character = viable_apples[0]["apple"]
         
         return target_coords
         
-
-class AStarNode(object):
-
-    def __init__(self, pos, g, h):
-        self.pos = pos
-        self.f = g + h
-        self.g = g
-        self.h = h
-        
-    def __repr__(self):
-        return "Pos(%d,%d), F(%d), G(%d), H(%d)" % (
-            self.pos[0], self.pos[1], self.f, self.g, self.h)
-
 
 class RunnerPlayer(Player):
 
@@ -539,7 +543,7 @@ class RunnerPlayer(Player):
         self.character = game.runner
         self.window = window
         self.chaser_danger_zone = chaser_danger_zone
-        self.path_interruptions = [self.in_danger_zone]
+        self.path_interruptions.append(self.in_danger_zone)
 
     def in_danger_zone(self):
         """
@@ -554,6 +558,7 @@ class RunnerPlayer(Player):
     def find_target_coords(self):
         viable_apples = self.viable_apples()
         target_coords = None
+        self.target_coords = None
 
         # Get a list of all valid coordinates surrounding the chaser so we can avoid it
         self.avoid_set = set(self.game.grid.surrounding_valid_coords(
@@ -561,6 +566,7 @@ class RunnerPlayer(Player):
 
         if len(viable_apples):
             target_coords = viable_apples[0]["apple"].position
+            self.target_character = viable_apples[0]["apple"]
         
         return target_coords
 
