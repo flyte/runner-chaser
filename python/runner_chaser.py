@@ -5,6 +5,7 @@ from random import randint, choice
 from math import ceil
 from numpy import interp
 from pprint import pprint
+from events import Event
 
 def enum(*sequential, **named):
     """
@@ -111,7 +112,7 @@ class Chaser(MovingCharacter, Score):
     
 class Apple(Character):
     
-    def __init__(self, position, shelf_life=8):
+    def __init__(self, position, shelf_life=160):
         super(Apple, self).__init__(position, (0, 255, 0))
         self.shelf_life = shelf_life
         
@@ -283,13 +284,14 @@ class Game(object):
     class Lose(Exception): pass
     class Win(Exception): pass
 
-    def __init__(self, grid_size, runner_start_pos, chaser_start_pos):
+    def __init__(self, grid_size, runner_start_pos, chaser_start_pos, win_score=100):
         self.grid = Grid(grid_size)
-        self.runner = Runner(runner_start_pos, (0, 0, 255), 2)
+        self.runner = Runner(runner_start_pos, (0, 0, 255), 1)
         self.chaser = Chaser(chaser_start_pos, (255, 0, 0))
         self.apples = []
         self.refill_apples()
         self.wall = None
+        self.win_score = win_score
         
     def __random_coords(self):
         return (randint(0, self.grid.size[0] - 1),
@@ -325,10 +327,10 @@ class Game(object):
             
         self.refill_apples()
         
-        if self.runner.score >= 100:
-            raise Game.Win("You ate 100 apples!")
-        elif self.chaser.score >= 100:
-            raise Game.Lose("The chaser ate 100 apples.")
+        if self.runner.score >= self.win_score:
+            raise Game.Win("You ate %d apples!" % self.win_score)
+        elif self.chaser.score >= self.win_score:
+            raise Game.Lose("The chaser ate %d apples." % self.win_score)
         
 
 class Player(object):
@@ -410,36 +412,53 @@ class AStarNode(object):
 
 class RunnerPlayer(Player):
 
-    def __init__(self, game):
+    def __init__(self, game, chaser_danger_zone=3):
         super(RunnerPlayer, self).__init__(game)
         self.character = game.runner
         self.window = window
+        self.chaser_danger_zone = chaser_danger_zone
+        self.path = None
+        self.path_progress = 0
+        self.path_found = Event()
+        self.successors_evaluated = Event()
+
+    def in_danger_zone(self):
+        """
+        Returns distance to chaser if our character is in the danger zone, else returns 0
+        """
+        chaser_distance = Grid.distance(self.character.position, self.game.chaser.position)
+        if chaser_distance <= self.chaser_danger_zone:
+            return chaser_distance
+        else:
+            return 0
 
     def heuristic_distance(self, target_coords, from_coords=None):
         """
-        Estimates distance cost from current location to target. Adds cost for proximity to chaser
-        and walls.
+        Estimates distance cost from current location to target. @TODO: Add cost for proximity to
+        chaser and walls.
         """
         if not from_coords: from_coords = self.character.position
         
-        chaser_pos = self.game.chaser.position
         distance = Grid.distance(from_coords, target_coords)
-        danger_zone = 3
         
         cost = 0
         pos = list(from_coords)
         while tuple(pos) != target_coords:
             cost += 1
             pos = Grid.next_pos(pos, target_coords, self.character.max_moves_per_turn)
-            
-            # If pos in the danger zone, add some cost
-            #chaser_distance = Grid.distance(pos, self.game.chaser.position, 1)
-            #if chaser_distance <= danger_zone:
-            #    extra_cost = int(danger_zone - chaser_distance + 1) * 5
-            #    cost += extra_cost
-            #    log("Added %d cost for being in the danger zone." % extra_cost)
-                
+        
         return cost
+
+    def create_a_star_node(self, nc, pos, target_coords):
+        # Get all surrounding coordinates within our character's max_moves_per_turn radius.
+        # Create nodes for each of the coordinates including distance from current node and
+        # heuristic distance (cost) from current character position.
+        
+        return AStarNode(pos,
+            Grid.distance(nc.pos, pos,
+                self.character.max_moves_per_turn) + nc.g,
+            self.heuristic_distance(target_coords, pos)
+        )
 
     def find_path(self):
         """
@@ -448,6 +467,10 @@ class RunnerPlayer(Player):
         Returns list of AStarNode starting with the current position and ending with
         the target position.
         """
+        self.path_progress += 1
+        if self.path and self.path_progress < len(self.path) and not self.in_danger_zone():
+            return self.path[self.path_progress:]
+        
         target_coords = self.find_target_coords(avoid_chaser=False)
         if not target_coords:
             return [AStarNode(self.character.position, 0, 0)]
@@ -463,69 +486,51 @@ class RunnerPlayer(Player):
             sorted_open_set = sorted(open_set.iteritems(), key=lambda n: n[1].f)
             nc = sorted_open_set[0][1]
             
-            #log("Open Set:")
-            #pprint(sorted_open_set)
-            
-            # If we've reached our goal, reconstruct the path and return it
-            if nc.pos == target_coords:
-                path = self.reconstruct_path(came_from, nc)
-                # Fill in path
-                for node in path:
-                    pygame.draw.circle(window, (0, 0, 255), get_position(node.pos), 10, 2)
-                    pygame.display.flip()
-                sleep(1)
-                return path
-            
             # Remove the current node from open_set and add it to closed_set
             del open_set[nc.pos]
             closed_set[nc.pos] = nc
             
+            # Get a list of all valid coordinates surrounding the chaser so we can avoid it
             coords_surrounding_chaser = self.game.grid.surrounding_valid_coords(
                 self.game.chaser.position, 2)
             
-            # Get all surrounding coordinates within our character's max_moves_per_turn radius.
-            # Create nodes for each of the coordinates including distance from current node and
-            # heuristic distance (cost) from current character position.
-            node_successors = [
-                AStarNode(pos,
-                    Grid.distance(nc.pos, pos, self.character.max_moves_per_turn) + nc.g,
-                    self.heuristic_distance(target_coords, pos)
-                ) for pos in self.game.grid.surrounding_valid_coords(nc.pos,
-                    self.character.max_moves_per_turn, set(coords_surrounding_chaser))
-            ]
+            # Get list of surrounding valid coordinates for the current node and create AStarNode
+            # instances for each
+            node_successors = [self.create_a_star_node(nc, pos, target_coords) for pos in \
+                self.game.grid.surrounding_valid_coords(nc.pos,
+                    self.character.max_moves_per_turn, set(coords_surrounding_chaser))]
             
             # For each of the nodes surrounding the current node
             for ns in node_successors:
+                #pygame.draw.circle(window, (255, 255, 0), get_position(ns.pos), 5)
+                #pygame.display.flip()            
+            
                 # If we've evaluated this neighbor node before and it took the same or more
                 # cost to get to it this time then move on.
-                if ns.pos in closed_set and ns.g >= closed_set[ns.pos].g:
+                in_closed_set = ns.pos in closed_set
+                if in_closed_set and ns.g >= closed_set[ns.pos].g:
                     continue
-                
                 if ns.pos in open_set and ns.g >= open_set[ns.pos].g:
                     continue
                 
-                # If we haven't listed this node for evaluation or if we have, but our current
-                # route to the node is more efficient
-                #if ns.pos not in open_set or (ns.pos in closed_set and ns.g < closed_set[ns.pos].g):
- 
-                if ns.pos in closed_set: del closed_set[ns.pos]
-                if ns.pos in open_set: del open_set[ns.pos] 
+                if in_closed_set: del closed_set[ns.pos]
  
                 # Add the current node as the originating node for this coordinate
                 came_from[ns.pos] = nc
                 
-                # If this neighbor has not been listed for evaluation, list it
-                if ns.pos not in open_set:
-                    open_set[ns.pos] = ns
+                # If we've reached our goal, reconstruct the path and return it
+                if ns.pos == target_coords:
+                    self.path = self.reconstruct_path(came_from, ns)
+                    self.path_progress = 0
+                    #Fire event
+                    self.path_found(self.path)
+                    return self.path
+                
+                # List this neighbor for evaluation
+                open_set[ns.pos] = ns
             
-            # Fill in closed set
-            for coords, node in closed_set.iteritems():
-                if coords == self.character.position:
-                    continue
-                red = interp(node.f, (0, 16), (0, 255))
-                pygame.draw.circle(window, (red, 255 - red, 0), get_position(coords), 5)
-
-            #pygame.display.flip()
+            # Fire event
+            self.successors_evaluated(open_set, closed_set, self.character.position, target_coords)
         
         # We didn't reach our goal, so return our current position only
         return [start_node]
@@ -612,9 +617,12 @@ class RunnerPlayer(Player):
         return target_coords
 
      
-GRID_POINT_DISTANCE = 50
+GRID_POINT_DISTANCE = 10
 APPLE_COUNT = 2
 WALLS = []
+DRAW_OPEN_SET = True
+DRAW_CLOSED_SET = True
+DRAW_PATH = True
 
 def get_position(grid_coords):
     """
@@ -635,15 +643,40 @@ def draw_grid(game, window):
         for y in xrange(s[1]):
             if (ix, iy) in WALLS:
                 pos = get_position((ix, iy))
-                pygame.draw.rect(window, (255, 255, 255), pygame.Rect(pos[0], pos[1], 10, 10))
+                pygame.draw.rect(window, (255, 255, 255), pygame.Rect(pos[0], pos[1], 3, 3))
             else:
-                pygame.draw.circle(window, (255, 255, 255), get_position((ix, iy)), 3)
+                pygame.draw.circle(window, (40, 40, 40), get_position((ix, iy)), 1)
             iy += 1
         ix += 1
 
 def draw_character(window, character):
     pygame.draw.circle(window, character.colour, get_position(character.position), 10)
     
+def draw_path(path):
+    if DRAW_PATH:
+        # Fill in path
+        for node in path:
+            pygame.draw.circle(window, (0, 0, 255), get_position(node.pos), 3)
+        pygame.display.flip()
+    sleep(1)
+    
+def draw_sets(open_set, closed_set, character_position, target_coords):
+    if DRAW_OPEN_SET:
+        for coords, node in open_set.iteritems():
+            if coords == character_position:
+                continue
+            pygame.draw.circle(window, (255, 255, 255), get_position(coords), 3, 1)
+
+    if DRAW_CLOSED_SET:
+        # Fill in closed set
+        for coords, node in closed_set.iteritems():
+            if coords == character_position:
+                continue
+            red = interp(node.h, (0, Grid.distance(character_position, target_coords)), (0, 255))
+            #red = 255
+            pygame.draw.circle(window, (red, 255 - red, 0), get_position(coords), 5)
+        pygame.display.flip()
+
 def draw_all(game, window):
     draw_grid(game, window)
     for apple in game.apples:
@@ -653,11 +686,12 @@ def draw_all(game, window):
     pygame.display.flip()
 
 if __name__ == "__main__":
-    grid_size = (16, 9)
+    grid_size = (80, 45)
     runner_start_pos = (0, grid_size[1] - 1)
     chaser_start_pos = (grid_size[0] - 1, 0)
 #    chaser_start_pos = (grid_size[0] / 2, grid_size[1] / 2)
 
+    """
     for i in xrange(grid_size[1]):
         if i != 0:
             WALLS.append((1, i))
@@ -671,8 +705,12 @@ if __name__ == "__main__":
             WALLS.append((5, i))
             WALLS.append((10, i))
             WALLS.append((11, i))
-    
-    game = Game(grid_size, runner_start_pos, chaser_start_pos)
+    """
+    for i in xrange(grid_size[1]):
+        if i != grid_size[1] / 2:
+            WALLS.append((grid_size[0] / 2, i))
+
+    game = Game(grid_size, runner_start_pos, chaser_start_pos, 99999999)
     
     pygame.init()
     window = pygame.display.set_mode((
@@ -683,6 +721,9 @@ if __name__ == "__main__":
     
     p_runner = RunnerPlayer(game)
     p_chaser = ChaserPlayer(game)
+    
+    p_runner.path_found += draw_path
+    p_runner.successors_evaluated += draw_sets
     
     previous_scores = [0, 0]
     while True:
@@ -706,6 +747,3 @@ if __name__ == "__main__":
         #sleep(0.25)
     
     draw_all(game, window)
-    
-    
-    
