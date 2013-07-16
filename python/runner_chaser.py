@@ -286,7 +286,7 @@ class Game(object):
 
     def __init__(self, grid_size, runner_start_pos, chaser_start_pos, win_score=100):
         self.grid = Grid(grid_size)
-        self.runner = Runner(runner_start_pos, (0, 0, 255), 1)
+        self.runner = Runner(runner_start_pos, (0, 0, 255), 2)
         self.chaser = Chaser(chaser_start_pos, (255, 0, 0))
         self.apples = []
         self.refill_apples()
@@ -339,6 +339,12 @@ class Player(object):
 
     def __init__(self, game):
         self.game = game
+        self.path = None
+        self.path_progress = 0
+        self.avoid_set = set()
+        self.path_found = Event()
+        self.successors_evaluated = Event()
+
         
     def viable_apples(self):
         # Find the distances to the apples
@@ -353,84 +359,30 @@ class Player(object):
                 viable_apples.append({ "apple": apple, "distance": distance })
         
         return sorted(viable_apples, key=lambda a: a["distance"])
+
+    def interrupt_path(self):
+        for i in self.path_interruptions:
+            if i():
+                return True
+
+        return False
         
     def make_move(self):
-        if hasattr(self, "find_path"):
-            path = self.find_path()
-            target_coords = path[1].pos if len(path) > 1 else path[0].pos
-        else:
-            target_coords = self.find_target_coords()
-        
+        target_coords = self.find_target_coords()
+
         if not target_coords:
             self.character.move_noop(self.game.grid)
             return
+
+        path = self.find_path(target_coords)
+        next_move = path[1].pos if len(path) > 1 else path[0].pos
         
-        self.character.move(
-            Grid.next_pos(self.character.position, target_coords,
-                self.character.max_moves_per_turn),
-                self.game.grid)
+        self.character.move(next_move, self.game.grid)
 
-    @abstractmethod
-    def find_target_coords(self):
-        pass
-
-
-class ChaserPlayer(Player):
-
-    def __init__(self, game):
-        super(ChaserPlayer, self).__init__(game)
-        self.character = game.chaser
-
-    def find_target_coords(self):
-        viable_apples = self.viable_apples()
-        target_coords = None
-    
-        # Target the runner
-        target_coords = self.game.runner.position
-        
-        # Unless an apple is closer
-        if len(viable_apples):
-            runner_distance = Grid.distance(self.character.position, self.game.runner.position)
-            if viable_apples[0]["distance"] < runner_distance:
-                target_coords = viable_apples[0]["apple"].position
-                
-        return target_coords
-        
-
-class AStarNode(object):
-
-    def __init__(self, pos, g, h):
-        self.pos = pos
-        self.f = g + h
-        self.g = g
-        self.h = h
-        
-    def __repr__(self):
-        return "Pos(%d,%d), F(%d), G(%d), H(%d)" % (
-            self.pos[0], self.pos[1], self.f, self.g, self.h)
-
-
-class RunnerPlayer(Player):
-
-    def __init__(self, game, chaser_danger_zone=3):
-        super(RunnerPlayer, self).__init__(game)
-        self.character = game.runner
-        self.window = window
-        self.chaser_danger_zone = chaser_danger_zone
-        self.path = None
-        self.path_progress = 0
-        self.path_found = Event()
-        self.successors_evaluated = Event()
-
-    def in_danger_zone(self):
-        """
-        Returns distance to chaser if our character is in the danger zone, else returns 0
-        """
-        chaser_distance = Grid.distance(self.character.position, self.game.chaser.position)
-        if chaser_distance <= self.chaser_danger_zone:
-            return chaser_distance
-        else:
-            return 0
+        #self.character.move(
+        #    Grid.next_pos(self.character.position, target_coords,
+        #        self.character.max_moves_per_turn),
+        #        self.game.grid)
 
     def heuristic_distance(self, target_coords, from_coords=None):
         """
@@ -460,7 +412,7 @@ class RunnerPlayer(Player):
             self.heuristic_distance(target_coords, pos)
         )
 
-    def find_path(self):
+    def find_path(self, target_coords):
         """
         Use A* algorithm to plot the path with the least cost from the current position
         to the target (apple).
@@ -468,10 +420,9 @@ class RunnerPlayer(Player):
         the target position.
         """
         self.path_progress += 1
-        if self.path and self.path_progress < len(self.path) and not self.in_danger_zone():
+        if self.path and self.path_progress < len(self.path) and not self.interrupt_path():
             return self.path[self.path_progress:]
         
-        target_coords = self.find_target_coords(avoid_chaser=False)
         if not target_coords:
             return [AStarNode(self.character.position, 0, 0)]
         
@@ -490,15 +441,11 @@ class RunnerPlayer(Player):
             del open_set[nc.pos]
             closed_set[nc.pos] = nc
             
-            # Get a list of all valid coordinates surrounding the chaser so we can avoid it
-            coords_surrounding_chaser = self.game.grid.surrounding_valid_coords(
-                self.game.chaser.position, 2)
-            
             # Get list of surrounding valid coordinates for the current node and create AStarNode
             # instances for each
             node_successors = [self.create_a_star_node(nc, pos, target_coords) for pos in \
                 self.game.grid.surrounding_valid_coords(nc.pos,
-                    self.character.max_moves_per_turn, set(coords_surrounding_chaser))]
+                    self.character.max_moves_per_turn, self.avoid_set)]
             
             # For each of the nodes surrounding the current node
             for ns in node_successors:
@@ -543,86 +490,87 @@ class RunnerPlayer(Player):
             return self.reconstruct_path(came_from, came_from[nc.pos]) + [nc]
         else:
             return [nc]
-        
 
-    def find_target_coords(self, avoid_chaser=True):
+    @abstractmethod
+    def find_target_coords(self):
+        pass
+
+
+class ChaserPlayer(Player):
+
+    def __init__(self, game):
+        super(ChaserPlayer, self).__init__(game)
+        self.character = game.chaser
+        self.path_interruptions = []
+
+    def find_target_coords(self):
         viable_apples = self.viable_apples()
         target_coords = None
+    
+        # Target the runner
+        target_coords = self.game.runner.position
+        
+        # Unless an apple is closer
+        if len(viable_apples):
+            runner_distance = Grid.distance(self.character.position, self.game.runner.position)
+            if viable_apples[0]["distance"] < runner_distance:
+                target_coords = viable_apples[0]["apple"].position
+        
+        return target_coords
+        
+
+class AStarNode(object):
+
+    def __init__(self, pos, g, h):
+        self.pos = pos
+        self.f = g + h
+        self.g = g
+        self.h = h
+        
+    def __repr__(self):
+        return "Pos(%d,%d), F(%d), G(%d), H(%d)" % (
+            self.pos[0], self.pos[1], self.f, self.g, self.h)
+
+
+class RunnerPlayer(Player):
+
+    def __init__(self, game, chaser_danger_zone=3):
+        super(RunnerPlayer, self).__init__(game)
+        self.character = game.runner
+        self.window = window
+        self.chaser_danger_zone = chaser_danger_zone
+        self.path_interruptions = [self.in_danger_zone]
+
+    def in_danger_zone(self):
+        """
+        Returns distance to chaser if our character is in the danger zone, else returns 0
+        """
+        chaser_distance = Grid.distance(self.character.position, self.game.chaser.position)
+        if chaser_distance <= self.chaser_danger_zone:
+            return chaser_distance
+        else:
+            return 0
+        
+    def find_target_coords(self):
+        viable_apples = self.viable_apples()
+        target_coords = None
+
+        # Get a list of all valid coordinates surrounding the chaser so we can avoid it
+        self.avoid_set = set(self.game.grid.surrounding_valid_coords(
+            self.game.chaser.position, 2))
 
         if len(viable_apples):
             target_coords = viable_apples[0]["apple"].position
         
-        if not avoid_chaser:
-            return target_coords
-            
-        chaser_distance = Grid.distance(self.character.position, self.game.chaser.position, 1)
-        danger_zone = 3
-        
-        if chaser_distance <= danger_zone:
-            log("Chaser is in danger zone!")
-            pos = self.character.position
-            moves = self.character.max_moves_per_turn
-            direction = Grid.direction(pos, self.game.chaser.position)
-            N, E, S, W = (Grid.Direction.NORTH, Grid.Direction.EAST,
-                Grid.Direction.SOUTH, Grid.Direction.WEST)
-            
-            target_coords = Grid.coords_for_direction(
-                pos, Grid.opposite_direction(direction[0]), moves)
-                
-            log("Trying to move in the %s direction.." % Grid.opposite_direction(direction[0]))
-            
-            if not self.game.grid.contains_coords(target_coords):
-                log("My evasive action takes me out of the grid (%d, %d).." % (
-                    target_coords[0], target_coords[1]))
-                # If the chaser is inline with us
-                if not direction[1]:
-                    log("Chaser is inline with us")
-                    if direction[0] in (N, S):
-                        log("Chaser is primarily north or south")
-                        middle = self.game.grid.size[0] / 2.0
-                        
-                        # If we're in the middle
-                        if pos[0] == middle:
-                            log("We're in the middle of the grid on the x plane")
-                            # Choose a direction at random
-                            new_direction = choice((E, W))
-                        else:
-                            log("We're in the east or west half of the grid")
-                            # If we're in the east half, go west (where the skies are blue)
-                            new_direction = W if pos[0] > middle else E
-                    else: # Direction was east or west, so we go north or south
-                        middle = self.game.grid.size[1] / 2.0
-                        
-                        if pos[1] == middle:
-                            log("We're in the middle of the grid on the y plane")
-                            new_direction = choice((N, S))
-                        else:
-                            log("We're in the north or south half of the grid")
-                            new_direction = N if pos[1] > middle else S
-                else:
-                    # We go in the direction that the chaser isn't
-                    new_direction = Grid.opposite_direction(direction[1])
-                    log("Going in the direction that the chaser isn't (%s).." % new_direction)
-            
-                target_coords = Grid.coords_for_direction(pos, new_direction, moves)
-            
-            # If our evasive action still takes us off the grid
-            if not self.game.grid.contains_coords(target_coords):
-                log("My evasive action takes me out of the grid again (%d, %d).." % (
-                    target_coords[0], target_coords[1]))
-                log("Last resort. Going in the direction that the chaser is furthest in (%s)" % direction[1])
-                # We go in the direction the chaser is furthest in
-                target_coords = Grid.coords_for_direction(pos, direction[0], moves)
-
         return target_coords
 
      
 GRID_POINT_DISTANCE = 10
 APPLE_COUNT = 2
 WALLS = []
-DRAW_OPEN_SET = True
-DRAW_CLOSED_SET = True
-DRAW_PATH = True
+DRAW_OPEN_SET = False
+DRAW_CLOSED_SET = False
+DRAW_PATH = False
 
 def get_position(grid_coords):
     """
@@ -707,8 +655,11 @@ if __name__ == "__main__":
             WALLS.append((11, i))
     """
     for i in xrange(grid_size[1]):
+        x = grid_size[0] / 2
         if i != grid_size[1] / 2:
-            WALLS.append((grid_size[0] / 2, i))
+            WALLS.append((x, i))
+            WALLS.append((x - 1, i))
+
 
     game = Game(grid_size, runner_start_pos, chaser_start_pos, 99999999)
     
@@ -729,7 +680,6 @@ if __name__ == "__main__":
     while True:
         for c in [ p_runner, p_chaser ]:
             c.make_move()
-            break
 
         try:
             game.tick()
